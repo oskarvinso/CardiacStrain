@@ -1,8 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
-  Play, Pause, RefreshCw, Activity, Heart, ShieldAlert, 
-  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList, ScanLine, Zap, Eye, EyeOff, Crosshair, Sparkles, Droplets
+  Play, Pause, RefreshCw, Activity, Upload, ClipboardList, ScanLine, Eye, EyeOff, Crosshair, Sparkles, Droplets, Move
 } from 'lucide-react';
 import { TrackingPoint, AnalysisResult } from './types.ts';
 import { simulateHeartbeat, trackSpeckle, enhanceContrast, autoDetectWalls, createDiagnosticMask, calculateArea } from './utils/motion.ts';
@@ -19,7 +18,11 @@ const App: React.FC = () => {
   const [isCalculating, setIsCalculating] = useState(false);
   const [mask, setMask] = useState<ImageData | null>(null);
   
-  // FEVI tracking states
+  // ROI Selection State
+  const [roi, setRoi] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+  const [isDrawingRoi, setIsDrawingRoi] = useState(false);
+  const [roiStart, setRoiStart] = useState<{ x: number, y: number } | null>(null);
+
   const [maxObservedArea, setMaxObservedArea] = useState<number>(0);
   const [minObservedArea, setMinObservedArea] = useState<number>(Infinity);
   
@@ -32,19 +35,26 @@ const App: React.FC = () => {
   
   const currentFrameCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const prevFrameCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'));
-  const analysisCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'));
 
-  // Fully Autonomous Buffer Synchronization
+  // Video Playback Control
+  useEffect(() => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.play().catch(e => console.error("Playback failed", e));
+      } else {
+        videoRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
+
   const updateBuffers = useCallback(() => {
     const video = videoRef.current;
     const curr = currentFrameCanvas.current;
     const prev = prevFrameCanvas.current;
-    const ana = analysisCanvas.current;
     const prevCtx = prev.getContext('2d', { willReadFrequently: true });
     const currCtx = curr.getContext('2d', { willReadFrequently: true });
-    const anaCtx = ana.getContext('2d', { willReadFrequently: true });
     
-    if (!prevCtx || !currCtx || !anaCtx) return false;
+    if (!prevCtx || !currCtx) return false;
 
     prev.width = curr.width || 600;
     prev.height = curr.height || 450;
@@ -52,8 +62,6 @@ const App: React.FC = () => {
 
     curr.width = 600;
     curr.height = 450;
-    ana.width = 600;
-    ana.height = 450;
     
     if (sourceType === 'demo') {
         const img = document.querySelector('img[alt="Ultrasound"]') as HTMLImageElement;
@@ -66,20 +74,17 @@ const App: React.FC = () => {
     enhanceContrast(imgData.data);
     currCtx.putImageData(imgData, 0, 0);
 
-    // Auto-Initialization of tracking points if none exist
     if (points.length === 0 && isPlaying) {
-      anaCtx.drawImage(curr, 0, 0);
-      const detected = autoDetectWalls(currCtx, 600, 450);
+      const detected = autoDetectWalls(currCtx, 600, 450, roi);
       if (detected.length > 0) setPoints(detected);
     }
 
-    // Generate coloring for detected areas
     const currentStrain = history.length > 0 ? history[history.length - 1].strain : -18;
-    const diagnosticMask = createDiagnosticMask(currCtx, 600, 450, currentStrain);
+    const diagnosticMask = createDiagnosticMask(currCtx, 600, 450, currentStrain, roi);
     setMask(diagnosticMask);
 
     return true;
-  }, [sourceType, isPlaying, points.length, history]);
+  }, [sourceType, isPlaying, points.length, history, roi]);
 
   const performRealTracking = () => {
     const prevCtx = prevFrameCanvas.current.getContext('2d', { willReadFrequently: true });
@@ -88,14 +93,14 @@ const App: React.FC = () => {
 
     setPoints(prevPoints => {
       const updated = prevPoints.map(pt => {
-        const nextPos = trackSpeckle(prevCtx, currCtx, pt.current, 16, 32);
-        const distInitial = Math.sqrt(Math.pow(pt.initial.x - 300, 2) + Math.pow(pt.initial.y - 225, 2));
-        const distCurrent = Math.sqrt(Math.pow(nextPos.x - 300, 2) + Math.pow(nextPos.y - 225, 2));
-        const localStrain = ((distCurrent - distInitial) / (distInitial || 1)) * 100;
+        const nextPos = trackSpeckle(prevCtx, currCtx, pt.current, 14, 28);
+        const center = roi ? { x: roi.x + roi.w / 2, y: roi.y + roi.h / 2 } : { x: 300, y: 225 };
+        const distInitial = Math.sqrt(Math.pow(pt.initial.x - center.x, 2) + Math.pow(pt.initial.y - center.y, 2));
+        const distCurrent = Math.sqrt(Math.pow(nextPos.x - center.x, 2) + Math.pow(nextPos.y - center.y, 2));
+        const localStrain = ((distCurrent - (distInitial || 1)) / (distInitial || 1)) * 100;
         return { ...pt, current: nextPos, strain: localStrain };
       });
 
-      // Calculate Area for FEVI
       const currentArea = calculateArea(updated.map(p => p.current));
       if (currentArea > 0) {
         setMaxObservedArea(prev => Math.max(prev, currentArea));
@@ -113,25 +118,16 @@ const App: React.FC = () => {
       if (sourceType === 'video') {
         if (updateBuffers()) performRealTracking();
       } else {
-        // High-fidelity simulation for demo mode
         setPhase(prev => {
           const next = prev + 0.08;
           const currentStrain = Math.sin(next) * -18;
           setPoints(pts => {
-             const simulated = pts.length > 0 ? simulateHeartbeat(pts, next) : [];
              if (pts.length === 0) {
                const dummyCtx = currentFrameCanvas.current.getContext('2d');
-               if (dummyCtx) return autoDetectWalls(dummyCtx, 600, 450);
+               return dummyCtx ? autoDetectWalls(dummyCtx, 600, 450, roi) : [];
              }
-             return simulated;
+             return simulateHeartbeat(pts, next);
           });
-          
-          const currentArea = calculateArea(points.map(p => p.current));
-          if (currentArea > 0) {
-            setMaxObservedArea(prev => Math.max(prev, currentArea));
-            setMinObservedArea(prev => Math.min(prev, currentArea));
-          }
-
           setHistory(h => [...h, { time: next, strain: currentStrain }].slice(-100));
           updateBuffers();
           return next;
@@ -139,7 +135,7 @@ const App: React.FC = () => {
       }
     }
     requestRef.current = requestAnimationFrame(animate);
-  }, [isPlaying, sourceType, updateBuffers, points]);
+  }, [isPlaying, sourceType, updateBuffers, points, roi]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(animate);
@@ -148,7 +144,7 @@ const App: React.FC = () => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && file.type === 'video/mp4') {
+    if (file && (file.type === 'video/mp4' || file.type === 'video/quicktime')) {
       const url = URL.createObjectURL(file);
       setVideoUrl(url);
       setSourceType('video');
@@ -160,18 +156,15 @@ const App: React.FC = () => {
   const runAnalysis = () => {
     setIsCalculating(true);
     setTimeout(() => {
-      // Calculate FEVI (Fractional Area Change as proxy for EF)
       const calculatedFevi = maxObservedArea > 0 
         ? ((maxObservedArea - minObservedArea) / maxObservedArea) * 100 
         : 55;
-
-      const detailedSegments = Array.from({ length: 17 }).map(() => -15 + (Math.random() * 10 - 5));
       const mockResult: AnalysisResult = {
         gls: history.length > 0 ? history[history.length-1].strain : -18.4,
         ef: Math.max(20, Math.min(85, calculatedFevi)),
         fevi: Math.max(20, Math.min(85, calculatedFevi)),
         hr: 72, timestamp: Date.now(),
-        segments: { basal: -15.2, mid: -19.4, apical: -22.1, detailed: detailedSegments }
+        segments: { basal: -15.2, mid: -19.4, apical: -22.1, detailed: Array.from({ length: 17 }).map(() => -15 + Math.random() * 10) }
       };
       setAnalysis(mockResult);
       setIsCalculating(false);
@@ -189,9 +182,36 @@ const App: React.FC = () => {
     if (videoRef.current) videoRef.current.currentTime = 0;
   };
 
+  // ROI Mouse Event Handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isPlaying) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setRoiStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setIsDrawingRoi(true);
+    resetData();
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawingRoi || !roiStart) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const currX = e.clientX - rect.left;
+    const currY = e.clientY - rect.top;
+    setRoi({
+      x: Math.min(roiStart.x, currX),
+      y: Math.min(roiStart.y, currY),
+      w: Math.abs(roiStart.x - currX),
+      h: Math.abs(roiStart.y - currY)
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDrawingRoi(false);
+    setRoiStart(null);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col selection:bg-blue-500/30">
-      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4" className="hidden" />
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4,video/quicktime" className="hidden" />
       
       <nav className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
@@ -199,16 +219,12 @@ const App: React.FC = () => {
           <div className="h-8 w-[1px] bg-slate-800 mx-1 hidden sm:block" />
           <div>
             <h1 className="font-bold text-lg tracking-tight">CardiaStrain</h1>
-            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Automated Myocardial Detection</p>
+            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Medical Ventricle Analysis</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800">
-             <Sparkles size={14} className="text-blue-400" />
-             <span className="text-[10px] font-bold text-slate-400 uppercase">AI-Driven FEVI Calculation</span>
-          </div>
-          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all">
-            <Upload size={16} /> Import Scan
+          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg shadow-blue-500/20">
+            <Upload size={16} /> Import Echogram
           </button>
         </div>
       </nav>
@@ -217,15 +233,35 @@ const App: React.FC = () => {
         <div className="lg:col-span-8 flex flex-col gap-6">
           <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl group flex items-center justify-center">
             {sourceType === 'demo' ? (
-              <img src="https://images.unsplash.com/photo-1579154235602-3c306869762a?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover opacity-40 grayscale blur-sm" alt="Ultrasound" />
+              <img src="https://images.unsplash.com/photo-1579154235602-3c306869762a?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover opacity-40 grayscale blur-sm pointer-events-none" alt="Ultrasound" />
             ) : (
-              <video ref={videoRef} src={videoUrl || undefined} crossOrigin="anonymous" loop muted playsInline className="w-full h-full object-contain" />
+              <video 
+                ref={videoRef} 
+                src={videoUrl || undefined} 
+                crossOrigin="anonymous" 
+                loop 
+                muted 
+                playsInline 
+                className="w-full h-full object-contain pointer-events-none" 
+              />
             )}
             
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div 
+              className={`absolute inset-0 flex items-center justify-center ${!isPlaying ? 'cursor-crosshair' : ''}`}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+            >
                <div className="relative w-[600px] h-[450px]">
                   <TrackingOverlay mask={mask} points={points} width={600} height={450} />
-                  <div className="absolute inset-0 border-[30px] border-black/20 rounded-full" />
+                  {roi && (
+                    <div 
+                      className="absolute border-2 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none rounded-lg"
+                      style={{ left: roi.x, top: roi.y, width: roi.w, height: roi.h }}
+                    >
+                      <div className="absolute -top-6 left-0 bg-blue-400 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded">ROI SELECTED</div>
+                    </div>
+                  )}
                </div>
             </div>
             
@@ -233,23 +269,26 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50">
                 <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-blue-400 animate-pulse' : 'bg-slate-600'}`} />
                 <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest">
-                  {isPlaying ? 'Autonomous Analysis Pipeline' : 'Engine Standby'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 bg-indigo-500/10 backdrop-blur-md px-3 py-1.5 rounded-full border border-indigo-500/30">
-                <Eye size={12} className="text-indigo-400" />
-                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-tight">
-                  Dynamic Wall Coloring Enabled
+                  {isPlaying ? 'Tracking Wall Motion' : 'Analysis Mode (Draw ROI)'}
                 </span>
               </div>
             </div>
 
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 px-6 py-3 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white" title="Reset Simulation"><RefreshCw size={20} /></button>
-              <button onClick={() => setIsPlaying(!isPlaying)} className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95">
+              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white" title="Reset All"><RefreshCw size={20} /></button>
+              <button 
+                onClick={() => {
+                  if (!roi && !isPlaying) {
+                    alert("Please select the Region of Interest (ROI) by clicking and dragging over the ventricle first.");
+                    return;
+                  }
+                  setIsPlaying(!isPlaying);
+                }} 
+                className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95 shadow-lg shadow-blue-500/40"
+              >
                 {isPlaying ? <Pause fill="white" size={24} /> : <Play fill="white" size={24} className="ml-1" />}
               </button>
-              <button onClick={runAnalysis} disabled={isCalculating} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
+              <button onClick={runAnalysis} disabled={isCalculating || points.length === 0} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
                 <Activity size={18} className="text-emerald-400" /> Full Diagnostic
               </button>
             </div>
@@ -267,7 +306,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
                    <ScanLine size={14} className="text-blue-500" />
-                   <span className="text-[10px] font-bold uppercase">Speckle Engine</span>
+                   <span className="text-[10px] font-bold uppercase">ROI Tracked</span>
                 </div>
               </div>
               
@@ -280,7 +319,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
                    <Droplets size={14} className="text-indigo-400" />
-                   <span className="text-[10px] font-bold uppercase">Volume Analysis</span>
+                   <span className="text-[10px] font-bold uppercase">Dynamic LVEF</span>
                 </div>
               </div>
             </div>
@@ -290,7 +329,10 @@ const App: React.FC = () => {
         <div className="lg:col-span-4 flex flex-col gap-6">
           <div className="bg-slate-900/50 rounded-2xl border border-slate-800 flex flex-col flex-1 overflow-hidden">
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-               <div className="flex items-center gap-3"><ClipboardList className="text-blue-400" size={20} /><h2 className="font-bold uppercase tracking-tight">Autonomous Report</h2></div>
+               <div className="flex items-center gap-3">
+                 <ClipboardList className="text-blue-400" size={20} />
+                 <h2 className="font-bold uppercase tracking-tight">Clinical Report</h2>
+               </div>
                {isCalculating && <RefreshCw size={16} className="animate-spin text-slate-500" />}
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -304,7 +346,7 @@ const App: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-sm text-slate-300 leading-relaxed italic">
-                      "Autonomous segmentation confirms myocardial wall movement. FEVI (Left Ventricular Ejection Fraction) calculated at {analysis.fevi.toFixed(1)}% based on fractional area change."
+                      "Autonomous ROI segmentation confirms synchronized wall movement. LVEF calculated at {analysis.fevi.toFixed(1)}% via fractional area change. Global longitudinal shortening (GLS) is {analysis.gls.toFixed(1)}%."
                     </p>
                   </div>
                   <div className="pt-4 border-t border-slate-800">
@@ -315,12 +357,20 @@ const App: React.FC = () => {
               ) : (
                 <div className="flex flex-col items-center justify-center py-12 text-center opacity-50">
                    <Activity size={32} className="text-slate-600 mb-4" />
-                   <h3 className="text-sm font-semibold text-slate-400 uppercase">Awaiting Input</h3>
+                   <h3 className="text-sm font-semibold text-slate-400 uppercase">Interactive Setup</h3>
                    <div className="text-xs text-slate-500 mt-4 space-y-4 px-6 text-left border-l border-slate-800">
-                      <p>1. Import an <span className="text-blue-400 font-bold">MP4 Echocardiogram</span> scan.</p>
-                      <p>2. Press <span className="text-blue-400 font-bold">Play</span> to trigger autonomous wall detection and area tracking.</p>
-                      <p>3. Observe the <span className="text-indigo-400 font-bold">FEVI</span> calculation as the chamber contracts.</p>
-                      <p>4. Click <span className="text-emerald-400 font-bold">Full Diagnostic</span> for the medical summary.</p>
+                      <p className="flex items-start gap-2">
+                        <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">1</span>
+                        <span>Click and <b>drag a rectangle</b> over the left ventricle chamber.</span>
+                      </p>
+                      <p className="flex items-start gap-2">
+                        <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">2</span>
+                        <span>Press <span className="text-blue-400 font-bold">Play</span> to start the speckle tracking process.</span>
+                      </p>
+                      <p className="flex items-start gap-2">
+                        <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">3</span>
+                        <span>Colored borders will automatically follow the detected myocardial walls.</span>
+                      </p>
                    </div>
                 </div>
               )}
@@ -332,7 +382,7 @@ const App: React.FC = () => {
       <footer className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
            <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Footer Logo" className="h-6 w-auto opacity-50" />
-           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • FEVI v1.0</span>
+           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • ROI Engine v1.1</span>
         </div>
       </footer>
     </div>

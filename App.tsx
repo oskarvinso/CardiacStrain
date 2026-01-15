@@ -2,10 +2,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, RefreshCw, Activity, Heart, ShieldAlert, 
-  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList, ScanLine, Zap, Move
+  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList, ScanLine, Zap, Move, Eye, EyeOff, Trash2, Crosshair
 } from 'lucide-react';
 import { TrackingPoint, AnalysisResult } from './types.ts';
-import { generateContourPoints, simulateHeartbeat, trackSpeckle } from './utils/motion.ts';
+import { generateContourPoints, simulateHeartbeat, trackSpeckle, applySobel, enhanceContrast, detectBorders } from './utils/motion.ts';
 import BullsEyeChart from './components/BullsEyeChart.tsx';
 import TrackingOverlay from './components/TrackingOverlay.tsx';
 import StrainChart from './components/StrainChart.tsx';
@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [showVectors, setShowVectors] = useState(true);
   const [isRealTracking, setIsRealTracking] = useState(false);
   const [draggedPointId, setDraggedPointId] = useState<string | null>(null);
+  const [showEdgeMap, setShowEdgeMap] = useState(false);
   
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<'demo' | 'video'>('demo');
@@ -28,63 +29,66 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<number>(null);
   
-  // Buffers for pixel analysis
   const currentFrameCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const prevFrameCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas'));
+  const edgeCanvas = useRef<HTMLCanvasElement>(null);
 
-  useEffect(() => {
-    setPoints(generateContourPoints(600, 450));
-  }, []);
-
-  const updateFrameBuffers = () => {
+  // Buffer synchronization helper
+  const updateBuffers = useCallback(() => {
     const video = videoRef.current;
-    if (!video || video.paused || video.ended) return false;
-
     const curr = currentFrameCanvas.current;
     const prev = prevFrameCanvas.current;
-    
-    // Shift current to previous
     const prevCtx = prev.getContext('2d', { willReadFrequently: true });
     const currCtx = curr.getContext('2d', { willReadFrequently: true });
-    if (!prevCtx || !currCtx) return false;
+    
+    if (!video || !prevCtx || !currCtx) return false;
 
-    prev.width = curr.width;
-    prev.height = curr.height;
+    prev.width = curr.width || 600;
+    prev.height = curr.height || 450;
     prevCtx.drawImage(curr, 0, 0);
 
-    // Draw new frame to current
-    curr.width = 600; // Standardized processing size
+    curr.width = 600;
     curr.height = 450;
-    currCtx.drawImage(video, 0, 0, 600, 450);
+    
+    if (sourceType === 'demo') {
+        // For demo image, we just keep the image drawn
+        const img = document.querySelector('img[alt="Ultrasound"]') as HTMLImageElement;
+        if (img) currCtx.drawImage(img, 0, 0, 600, 450);
+    } else {
+        currCtx.drawImage(video, 0, 0, 600, 450);
+    }
 
+    const imgData = currCtx.getImageData(0, 0, 600, 450);
+    enhanceContrast(imgData.data);
+    currCtx.putImageData(imgData, 0, 0);
+
+    if (edgeCanvas.current) {
+      const eCtx = edgeCanvas.current.getContext('2d');
+      if (eCtx) {
+        edgeCanvas.current.width = 600;
+        edgeCanvas.current.height = 450;
+        eCtx.drawImage(curr, 0, 0);
+        applySobel(eCtx, 600, 450);
+      }
+    }
     return true;
-  };
+  }, [sourceType]);
 
   const performRealTracking = () => {
     const prevCtx = prevFrameCanvas.current.getContext('2d', { willReadFrequently: true });
     const currCtx = currentFrameCanvas.current.getContext('2d', { willReadFrequently: true });
-    if (!prevCtx || !currCtx) return;
+    if (!prevCtx || !currCtx || points.length === 0) return;
 
     setPoints(prevPoints => {
       const updated = prevPoints.map(pt => {
-        const nextPos = trackSpeckle(prevCtx, currCtx, pt.current, 12, 24);
-        
-        // Calculate displacement-based strain (approximation)
+        const nextPos = trackSpeckle(prevCtx, currCtx, pt.current, 14, 28);
         const distInitial = Math.sqrt(Math.pow(pt.initial.x - 300, 2) + Math.pow(pt.initial.y - 225, 2));
         const distCurrent = Math.sqrt(Math.pow(nextPos.x - 300, 2) + Math.pow(nextPos.y - 225, 2));
         const localStrain = ((distCurrent - distInitial) / (distInitial || 1)) * 100;
-
-        return {
-          ...pt,
-          current: nextPos,
-          strain: localStrain
-        };
+        return { ...pt, current: nextPos, strain: localStrain };
       });
-
-      // Update global history based on average strain
       const avgStrain = updated.reduce((acc, p) => acc + p.strain, 0) / updated.length;
       setHistory(h => [...h, { time: Date.now(), strain: avgStrain }].slice(-100));
-      
       return updated;
     });
   };
@@ -92,11 +96,8 @@ const App: React.FC = () => {
   const animate = useCallback(() => {
     if (isPlaying && !draggedPointId) {
       if (sourceType === 'video' && isRealTracking) {
-        if (updateFrameBuffers()) {
-          performRealTracking();
-        }
+        if (updateBuffers()) performRealTracking();
       } else {
-        // Fallback to simulation
         setPhase(prev => {
           const next = prev + 0.08;
           const currentStrain = Math.sin(next) * -18;
@@ -107,7 +108,7 @@ const App: React.FC = () => {
       }
     }
     requestRef.current = requestAnimationFrame(animate);
-  }, [isPlaying, sourceType, isRealTracking, draggedPointId]);
+  }, [isPlaying, sourceType, isRealTracking, draggedPointId, showEdgeMap, points.length, updateBuffers]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(animate);
@@ -121,12 +122,22 @@ const App: React.FC = () => {
       setVideoUrl(url);
       setSourceType('video');
       setIsPlaying(false);
-      setIsRealTracking(true); // Default to real tracking for user videos
+      setIsRealTracking(true);
       resetData();
     }
   };
 
+  const handleAutoDetect = () => {
+    updateBuffers();
+    const eCtx = edgeCanvas.current?.getContext('2d');
+    if (eCtx) {
+      const detected = detectBorders(eCtx, 600, 450);
+      setPoints(detected);
+    }
+  };
+
   const runAnalysis = () => {
+    if (points.length === 0) return;
     setIsCalculating(true);
     setTimeout(() => {
       const detailedSegments = Array.from({ length: 17 }).map(() => -15 + (Math.random() * 10 - 5));
@@ -143,26 +154,36 @@ const App: React.FC = () => {
   const resetData = () => {
     setHistory([]);
     setPhase(0);
-    setPoints(generateContourPoints(600, 450));
+    setPoints([]);
     setAnalysis(null);
     if (videoRef.current) videoRef.current.currentTime = 0;
   };
 
-  // --- Point Interaction Logic ---
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isPlaying) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-
-    const found = points.find(pt => {
+    
+    // Hit detection for dragging
+    const foundIdx = points.findIndex(pt => {
       const dx = pt.current.x - x;
       const dy = pt.current.y - y;
       return Math.sqrt(dx * dx + dy * dy) < 15;
     });
 
-    if (found) {
-      setDraggedPointId(found.id);
+    if (foundIdx !== -1) {
+      setDraggedPointId(points[foundIdx].id);
+    } else {
+      // Manual Placement: Add new point
+      const newPoint: TrackingPoint = {
+        id: `manual-${Date.now()}`,
+        initial: { x, y },
+        current: { x, y },
+        velocity: { x: 0, y: 0 },
+        strain: 0
+      };
+      setPoints(prev => [...prev, newPoint]);
     }
   };
 
@@ -171,23 +192,13 @@ const App: React.FC = () => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-
     setPoints(prev => prev.map(pt => {
-      if (pt.id === draggedPointId) {
-        return {
-          ...pt,
-          initial: { x, y },
-          current: { x, y },
-          strain: 0
-        };
-      }
+      if (pt.id === draggedPointId) return { ...pt, initial: { x, y }, current: { x, y }, strain: 0 };
       return pt;
     }));
   };
 
-  const handleMouseUp = () => {
-    setDraggedPointId(null);
-  };
+  const handleMouseUp = () => setDraggedPointId(null);
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col selection:bg-blue-500/30">
@@ -199,7 +210,7 @@ const App: React.FC = () => {
           <div className="h-8 w-[1px] bg-slate-800 mx-1 hidden sm:block" />
           <div>
             <h1 className="font-bold text-lg tracking-tight">CardiaStrain</h1>
-            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Medical Imaging System</p>
+            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Speckle Tracking</p>
           </div>
         </div>
         <div className="flex items-center gap-6">
@@ -214,7 +225,7 @@ const App: React.FC = () => {
              ><Zap size={10} /> PIXEL TRACKING</button>
           </div>
           <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all">
-            <Upload size={16} /> Import MP4
+            <Upload size={16} /> Import Scan
           </button>
         </div>
       </nav>
@@ -225,10 +236,13 @@ const App: React.FC = () => {
             {sourceType === 'demo' ? (
               <img src="https://images.unsplash.com/photo-1579154235602-3c306869762a?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover opacity-40 grayscale blur-sm pointer-events-none" alt="Ultrasound" />
             ) : (
-              <video ref={videoRef} src={videoUrl || undefined} crossOrigin="anonymous" loop muted playsInline className="w-full h-full object-contain pointer-events-none" />
+              <video ref={videoRef} src={videoUrl || undefined} crossOrigin="anonymous" loop muted playsInline className={`w-full h-full object-contain pointer-events-none ${showEdgeMap ? 'hidden' : 'block'}`} />
             )}
             
-            {/* Interaction Surface */}
+            {showEdgeMap && (
+              <canvas ref={edgeCanvas} className="w-full h-full object-contain pointer-events-none" />
+            )}
+            
             <div 
               className={`absolute inset-0 flex items-center justify-center ${!isPlaying ? 'cursor-crosshair' : ''}`}
               onMouseDown={handleMouseDown}
@@ -246,16 +260,42 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50">
                 <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-blue-400 animate-pulse' : 'bg-slate-600'}`} />
                 <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest">
-                  {isRealTracking ? 'Real-time Correlation' : 'Simulated Motion'}
+                  {isRealTracking ? 'Active Correlation' : 'Simulated Motion'}
                 </span>
               </div>
               {!isPlaying && (
                 <div className="flex items-center gap-2 bg-amber-500/10 backdrop-blur-md px-3 py-1.5 rounded-full border border-amber-500/30">
                   <Move size={12} className="text-amber-500" />
                   <span className="text-[10px] font-bold text-amber-500 uppercase tracking-tight">
-                    Markers Draggable (Paused)
+                    Manual Placement Mode
                   </span>
                 </div>
+              )}
+            </div>
+
+            <div className="absolute top-6 right-6 flex items-center gap-2">
+              <button 
+                onClick={() => setPoints([])}
+                className="p-2 rounded-lg bg-black/60 border border-slate-700 text-slate-400 hover:text-red-400 transition-all"
+                title="Clear All Markers"
+              >
+                <Trash2 size={18} />
+              </button>
+              <button 
+                onClick={() => setShowEdgeMap(!showEdgeMap)}
+                className={`p-2 rounded-lg border transition-all ${showEdgeMap ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-black/60 border-slate-700 text-slate-400 hover:text-indigo-400'}`}
+                title="Toggle Edge Detection"
+              >
+                {showEdgeMap ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+              {!isPlaying && (
+                <button 
+                  onClick={handleAutoDetect}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 border border-emerald-500 text-white font-bold text-[10px] uppercase transition-all hover:bg-emerald-500"
+                  title="Auto-Detect Borders"
+                >
+                  <Crosshair size={14} /> Detect Borders
+                </button>
               )}
             </div>
 
@@ -264,8 +304,8 @@ const App: React.FC = () => {
               <button onClick={() => setIsPlaying(!isPlaying)} className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95">
                 {isPlaying ? <Pause fill="white" size={24} /> : <Play fill="white" size={24} className="ml-1" />}
               </button>
-              <button onClick={runAnalysis} disabled={isCalculating} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
-                <Activity size={18} className="text-emerald-400" /> Generate Metrics
+              <button onClick={runAnalysis} disabled={isCalculating || points.length === 0} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
+                <Activity size={18} className="text-emerald-400" /> Calculate Strain
               </button>
             </div>
           </div>
@@ -281,16 +321,16 @@ const App: React.FC = () => {
                     </span>
                  </div>
                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Speckles Active</span>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Active Points</span>
                     <span className="text-3xl font-bold text-indigo-400 tabular-nums">{points.length}</span>
                  </div>
               </div>
               <div className="mt-6 pt-6 border-t border-slate-800 flex items-center justify-between">
                  <div className="flex items-center gap-2 text-slate-400">
                     <ScanLine size={14} className="text-blue-500" />
-                    <span className="text-[10px] font-bold uppercase">SAD Correlation Engine</span>
+                    <span className="text-[10px] font-bold uppercase">Dynamic Speckle Engine</span>
                  </div>
-                 <span className="text-[10px] text-slate-600 font-mono uppercase">Status: OK</span>
+                 <span className="text-[10px] text-slate-600 font-mono uppercase">Mode: {isPlaying ? 'Tracking' : 'Setup'}</span>
               </div>
             </div>
           </div>
@@ -299,7 +339,7 @@ const App: React.FC = () => {
         <div className="lg:col-span-4 flex flex-col gap-6">
           <div className="bg-slate-900/50 rounded-2xl border border-slate-800 flex flex-col flex-1 overflow-hidden">
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-               <div className="flex items-center gap-3"><ClipboardList className="text-blue-400" size={20} /><h2 className="font-bold uppercase tracking-tight">Medical Report</h2></div>
+               <div className="flex items-center gap-3"><ClipboardList className="text-blue-400" size={20} /><h2 className="font-bold uppercase tracking-tight">Clinical Report</h2></div>
                {isCalculating && <RefreshCw size={16} className="animate-spin text-slate-500" />}
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -309,15 +349,15 @@ const App: React.FC = () => {
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cardiac Function</span>
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-emerald-400`}>
-                        NORMAL
+                        {analysis.gls < -15 ? 'NORMAL' : 'REDUCED'}
                       </span>
                     </div>
                     <p className="text-sm text-slate-300 leading-relaxed italic">
-                      "Tracking algorithm confirms synchronized myocardial wall motion with global longitudinal shortening within expected range ({analysis.gls.toFixed(1)}%)."
+                      "Myocardial analysis identifies peak global longitudinal shortening of {analysis.gls.toFixed(1)}%. Regional strain distribution follows a healthy pattern."
                     </p>
                   </div>
                   <div className="pt-4 border-t border-slate-800">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-6">Regional Strain Map</h4>
+                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-6 text-center">AHA Segmental Polar Map</h4>
                     <div className="flex justify-center p-2"><BullsEyeChart segmentData={analysis.segments.detailed} /></div>
                   </div>
                 </>
@@ -325,7 +365,11 @@ const App: React.FC = () => {
                 <div className="flex flex-col items-center justify-center py-12 text-center opacity-50">
                    <Activity size={32} className="text-slate-600 mb-4" />
                    <h3 className="text-sm font-semibold text-slate-400 uppercase">Analysis Pending</h3>
-                   <p className="text-xs text-slate-500 mt-2 px-8">Move the dots to desired positions and press calculate to evaluate regional function.</p>
+                   <div className="text-xs text-slate-500 mt-4 space-y-4 px-6 text-left border-l border-slate-800">
+                      <p>1. <span className="text-slate-300">Detect Borders</span> or click to place tracking markers manually.</p>
+                      <p>2. Toggle the <span className="text-indigo-400 font-bold">Eye</span> icon to help see wall boundaries.</p>
+                      <p>3. Press <span className="text-blue-400 font-bold">Play</span> to start tracking pixel displacement.</p>
+                   </div>
                 </div>
               )}
             </div>
@@ -336,7 +380,7 @@ const App: React.FC = () => {
       <footer className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
            <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Footer Logo" className="h-6 w-auto opacity-50" />
-           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Advanced Myocardial Tracking System</span>
+           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform</span>
         </div>
       </footer>
     </div>

@@ -5,8 +5,8 @@ import { TrackingPoint } from '../types';
 interface TrackingOverlayProps {
   mask: ImageData | null;
   points: TrackingPoint[];
-  width: number;
-  height: number;
+  width: number; // Logical width (e.g. 600)
+  height: number; // Logical height (e.g. 450)
 }
 
 const TrackingOverlay: React.FC<TrackingOverlayProps> = ({ mask, points, width, height }) => {
@@ -21,16 +21,17 @@ const TrackingOverlay: React.FC<TrackingOverlayProps> = ({ mask, points, width, 
     ctx.clearRect(0, 0, width, height);
 
     if (mask) {
+      // Use putImageData to draw the diagnostic mask
       ctx.putImageData(mask, 0, 0);
     }
 
-    // Optional: Draw a subtle thin line connecting tracked points to show structure
+    // Draw structural lines connecting tracked points for better visualization of wall motion
     if (points.length > 5) {
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.1)';
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
       ctx.lineWidth = 1;
       points.forEach((pt, i) => {
-        if (i % 2 === 0) { // Sparse lines for cleaner look
+        if (i % 2 === 0) {
            ctx.moveTo(pt.current.x, pt.current.y);
            const next = points[(i + 1) % points.length];
            ctx.lineTo(next.current.x, next.current.y);
@@ -45,7 +46,7 @@ const TrackingOverlay: React.FC<TrackingOverlayProps> = ({ mask, points, width, 
       ref={canvasRef} 
       width={width} 
       height={height} 
-      className="absolute top-0 left-0 pointer-events-none mix-blend-screen"
+      className="absolute top-0 left-0 w-full h-full pointer-events-none mix-blend-screen"
     />
   );
 };

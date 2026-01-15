@@ -38,11 +38,12 @@ const App: React.FC = () => {
 
   // Video Playback Control
   useEffect(() => {
-    if (videoRef.current) {
+    const video = videoRef.current;
+    if (video) {
       if (isPlaying) {
-        videoRef.current.play().catch(e => console.error("Playback failed", e));
+        video.play().catch(e => console.error("Playback failed", e));
       } else {
-        videoRef.current.pause();
+        video.pause();
       }
     }
   }, [isPlaying]);
@@ -97,7 +98,7 @@ const App: React.FC = () => {
         const center = roi ? { x: roi.x + roi.w / 2, y: roi.y + roi.h / 2 } : { x: 300, y: 225 };
         const distInitial = Math.sqrt(Math.pow(pt.initial.x - center.x, 2) + Math.pow(pt.initial.y - center.y, 2));
         const distCurrent = Math.sqrt(Math.pow(nextPos.x - center.x, 2) + Math.pow(nextPos.y - center.y, 2));
-        const localStrain = ((distCurrent - (distInitial || 1)) / (distInitial || 1)) * 100;
+        const localStrain = ((distCurrent - (distInitial || 1)) / (distInitial || 1)) * -100; // Inverted for conventional strain representation
         return { ...pt, current: nextPos, strain: localStrain };
       });
 
@@ -107,7 +108,7 @@ const App: React.FC = () => {
         setMinObservedArea(prev => Math.min(prev, currentArea));
       }
 
-      const avgStrain = updated.reduce((acc, p) => acc + p.strain, 0) / updated.length;
+      const avgStrain = updated.reduce((acc, p) => acc + p.strain, 0) / (updated.length || 1);
       setHistory(h => [...h, { time: Date.now(), strain: avgStrain }].slice(-100));
       return updated;
     });
@@ -182,25 +183,30 @@ const App: React.FC = () => {
     if (videoRef.current) videoRef.current.currentTime = 0;
   };
 
-  // ROI Mouse Event Handlers
-  const handleMouseDown = (e: React.MouseEvent) => {
+  // Helper to map mouse coordinates to logical 600x450 space
+  const getLogicalCoords = (e: React.MouseEvent, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (600 / rect.width);
+    const y = (e.clientY - rect.top) * (450 / rect.height);
+    return { x, y };
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isPlaying) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    setRoiStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const coords = getLogicalCoords(e, e.currentTarget);
+    setRoiStart(coords);
     setIsDrawingRoi(true);
     resetData();
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isDrawingRoi || !roiStart) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const currX = e.clientX - rect.left;
-    const currY = e.clientY - rect.top;
+    const coords = getLogicalCoords(e, e.currentTarget);
     setRoi({
-      x: Math.min(roiStart.x, currX),
-      y: Math.min(roiStart.y, currY),
-      w: Math.abs(roiStart.x - currX),
-      h: Math.abs(roiStart.y - currY)
+      x: Math.min(roiStart.x, coords.x),
+      y: Math.min(roiStart.y, coords.y),
+      w: Math.abs(roiStart.x - coords.x),
+      h: Math.abs(roiStart.y - coords.y)
     });
   };
 
@@ -210,7 +216,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col selection:bg-blue-500/30">
+    <div className="min-h-screen bg-slate-950 flex flex-col selection:bg-blue-500/30 overflow-x-hidden">
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4,video/quicktime" className="hidden" />
       
       <nav className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
@@ -219,7 +225,7 @@ const App: React.FC = () => {
           <div className="h-8 w-[1px] bg-slate-800 mx-1 hidden sm:block" />
           <div>
             <h1 className="font-bold text-lg tracking-tight">CardiaStrain</h1>
-            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Medical Ventricle Analysis</p>
+            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Clinical Strain Engine</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -231,64 +237,75 @@ const App: React.FC = () => {
 
       <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1600px] mx-auto w-full">
         <div className="lg:col-span-8 flex flex-col gap-6">
-          <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl group flex items-center justify-center">
-            {sourceType === 'demo' ? (
-              <img src="https://images.unsplash.com/photo-1579154235602-3c306869762a?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover opacity-40 grayscale blur-sm pointer-events-none" alt="Ultrasound" />
-            ) : (
-              <video 
-                ref={videoRef} 
-                src={videoUrl || undefined} 
-                crossOrigin="anonymous" 
-                loop 
-                muted 
-                playsInline 
-                className="w-full h-full object-contain pointer-events-none" 
-              />
-            )}
-            
+          <div className="relative aspect-[4/3] bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl group flex items-center justify-center">
+            <div className="absolute inset-0 z-0">
+               {sourceType === 'demo' ? (
+                <img src="https://images.unsplash.com/photo-1579154235602-3c306869762a?auto=format&fit=crop&q=80&w=1200" className="w-full h-full object-cover opacity-40 grayscale blur-sm pointer-events-none" alt="Ultrasound" />
+              ) : (
+                <video 
+                  ref={videoRef} 
+                  src={videoUrl || undefined} 
+                  crossOrigin="anonymous" 
+                  loop 
+                  muted 
+                  playsInline 
+                  className="w-full h-full object-contain pointer-events-none" 
+                />
+              )}
+            </div>
+
             <div 
-              className={`absolute inset-0 flex items-center justify-center ${!isPlaying ? 'cursor-crosshair' : ''}`}
+              className={`absolute inset-0 z-10 flex items-center justify-center ${!isPlaying ? 'cursor-crosshair' : ''}`}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
             >
-               <div className="relative w-[600px] h-[450px]">
+               <div className="relative w-full h-full">
                   <TrackingOverlay mask={mask} points={points} width={600} height={450} />
                   {roi && (
                     <div 
-                      className="absolute border-2 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none rounded-lg"
-                      style={{ left: roi.x, top: roi.y, width: roi.w, height: roi.h }}
+                      className="absolute border-2 border-dashed border-blue-400 bg-blue-500/5 pointer-events-none rounded-lg z-20"
+                      style={{ 
+                        left: `${(roi.x / 600) * 100}%`, 
+                        top: `${(roi.y / 450) * 100}%`, 
+                        width: `${(roi.w / 600) * 100}%`, 
+                        height: `${(roi.h / 450) * 100}%` 
+                      }}
                     >
-                      <div className="absolute -top-6 left-0 bg-blue-400 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded">ROI SELECTED</div>
+                      <div className="absolute -top-6 left-0 bg-blue-400 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow-sm">ROI ACTIVE</div>
+                      <div className="absolute bottom-1 right-1 flex items-center gap-1 opacity-50">
+                         <ScanLine size={10} className="text-blue-300 animate-pulse" />
+                      </div>
                     </div>
                   )}
                </div>
             </div>
             
-            <div className="absolute top-6 left-6 flex flex-col gap-2 pointer-events-none">
+            <div className="absolute top-6 left-6 z-30 flex flex-col gap-2 pointer-events-none">
               <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50">
                 <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-blue-400 animate-pulse' : 'bg-slate-600'}`} />
                 <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest">
-                  {isPlaying ? 'Tracking Wall Motion' : 'Analysis Mode (Draw ROI)'}
+                  {isPlaying ? 'Live Strain Analysis' : 'Engine Ready - Select ROI'}
                 </span>
               </div>
             </div>
 
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 px-6 py-3 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white" title="Reset All"><RefreshCw size={20} /></button>
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-4 bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 px-6 py-3 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white transition-colors" title="Reset All"><RefreshCw size={20} /></button>
               <button 
                 onClick={() => {
                   if (!roi && !isPlaying) {
-                    alert("Please select the Region of Interest (ROI) by clicking and dragging over the ventricle first.");
+                    alert("ROI Required: Drag a box over the ventricle before starting.");
                     return;
                   }
                   setIsPlaying(!isPlaying);
                 }} 
-                className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95 shadow-lg shadow-blue-500/40"
+                className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-all active:scale-90 shadow-lg shadow-blue-500/40"
               >
                 {isPlaying ? <Pause fill="white" size={24} /> : <Play fill="white" size={24} className="ml-1" />}
               </button>
-              <button onClick={runAnalysis} disabled={isCalculating || points.length === 0} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
+              <button onClick={runAnalysis} disabled={isCalculating || points.length === 0} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50 transition-all">
                 <Activity size={18} className="text-emerald-400" /> Full Diagnostic
               </button>
             </div>
@@ -299,14 +316,14 @@ const App: React.FC = () => {
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
                 <div className="flex flex-col gap-1">
-                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Global Strain (GLS)</span>
+                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Peak Strain</span>
                    <span className={`text-3xl font-bold tabular-nums ${history.length > 0 && history[history.length-1].strain < -15 ? 'text-emerald-400' : 'text-amber-400'}`}>
                      {history.length > 0 ? history[history.length-1].strain.toFixed(1) : '0.0'}%
                    </span>
                 </div>
                 <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
                    <ScanLine size={14} className="text-blue-500" />
-                   <span className="text-[10px] font-bold uppercase">ROI Tracked</span>
+                   <span className="text-[10px] font-bold uppercase tracking-widest">GLS Curve</span>
                 </div>
               </div>
               
@@ -319,7 +336,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
                    <Droplets size={14} className="text-indigo-400" />
-                   <span className="text-[10px] font-bold uppercase">Dynamic LVEF</span>
+                   <span className="text-[10px] font-bold uppercase tracking-widest">Output</span>
                 </div>
               </div>
             </div>
@@ -337,7 +354,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {analysis ? (
-                <>
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Functional Status</span>
@@ -353,7 +370,7 @@ const App: React.FC = () => {
                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-6 text-center">AHA Segmental Polar Map</h4>
                     <div className="flex justify-center p-2"><BullsEyeChart segmentData={analysis.segments.detailed} /></div>
                   </div>
-                </>
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-12 text-center opacity-50">
                    <Activity size={32} className="text-slate-600 mb-4" />
@@ -361,15 +378,15 @@ const App: React.FC = () => {
                    <div className="text-xs text-slate-500 mt-4 space-y-4 px-6 text-left border-l border-slate-800">
                       <p className="flex items-start gap-2">
                         <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">1</span>
-                        <span>Click and <b>drag a rectangle</b> over the left ventricle chamber.</span>
+                        <span>Drag a rectangle over the <b>Left Ventricle</b>.</span>
                       </p>
                       <p className="flex items-start gap-2">
                         <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">2</span>
-                        <span>Press <span className="text-blue-400 font-bold">Play</span> to start the speckle tracking process.</span>
+                        <span>Click <Play size={10} className="inline mx-1" /> to process wall motion.</span>
                       </p>
                       <p className="flex items-start gap-2">
                         <span className="bg-blue-600/20 text-blue-400 w-5 h-5 flex items-center justify-center rounded text-[10px] font-bold shrink-0">3</span>
-                        <span>Colored borders will automatically follow the detected myocardial walls.</span>
+                        <span>Observe <b>Auto-Borders</b> and real-time Strain mapping.</span>
                       </p>
                    </div>
                 </div>
@@ -382,7 +399,7 @@ const App: React.FC = () => {
       <footer className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
            <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Footer Logo" className="h-6 w-auto opacity-50" />
-           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • ROI Engine v1.1</span>
+           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • Precision ROI Engine v1.2</span>
         </div>
       </footer>
     </div>

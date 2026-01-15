@@ -9,19 +9,19 @@ export interface TrackingPoint {
   initial: Vector2;
   current: Vector2;
   velocity: Vector2;
-  strain: number; // local deformation
+  strain: number;
 }
 
 export interface AnalysisResult {
-  gls: number; // Global Longitudinal Strain
-  ef: number; // Ejection Fraction (estimated)
-  hr: number; // Heart Rate
+  gls: number;
+  ef: number;
+  hr: number;
   timestamp: number;
   segments: {
     basal: number;
     mid: number;
     apical: number;
-    detailed: number[]; // 17 segments for Bull's Eye
+    detailed: number[];
   };
 }
 

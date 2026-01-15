@@ -6,6 +6,7 @@ import { generateContourPoints, simulateHeartbeat } from './utils/motion';
 import { getClinicalInsights } from './services/geminiService';
 import TrackingOverlay from './components/TrackingOverlay';
 import StrainChart from './components/StrainChart';
+import BullsEyeChart from './components/BullsEyeChart';
 
 const App: React.FC = () => {
   // State
@@ -112,12 +113,24 @@ const App: React.FC = () => {
   // Handle Analysis Trigger
   const runAnalysis = async () => {
     setIsLoadingInsight(true);
+    
+    // Generate detailed 17-segment mock data
+    const detailedSegments = Array.from({ length: 17 }).map(() => {
+      // Generate realistic values between -24 and -4
+      return -15 + (Math.random() * 10 - 5);
+    });
+
     const mockResult: AnalysisResult = {
       gls: -18.4,
       ef: 55,
       hr: 72,
       timestamp: Date.now(),
-      segments: { basal: -15.2, mid: -19.4, apical: -22.1 }
+      segments: { 
+        basal: -15.2, 
+        mid: -19.4, 
+        apical: -22.1,
+        detailed: detailedSegments
+      }
     };
     setAnalysis(mockResult);
 
@@ -361,17 +374,9 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="pt-4 border-t border-slate-800">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-4">Segmental Distribution</h4>
-                    <div className="flex justify-center py-4">
-                      <div className="relative w-32 h-32 rounded-full border-4 border-slate-800 flex items-center justify-center">
-                         <div className="absolute inset-2 rounded-full border-2 border-slate-800/50 flex items-center justify-center">
-                            <div className="w-8 h-8 rounded-full bg-emerald-500/30 flex items-center justify-center border border-emerald-500/50">
-                               <span className="text-[10px] font-bold text-emerald-400">-22%</span>
-                            </div>
-                         </div>
-                         <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[9px] font-bold text-slate-500">APICAL</div>
-                         <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-bold text-slate-500">BASAL</div>
-                      </div>
+                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-6">Segmental Health Map (Bull's Eye)</h4>
+                    <div className="flex justify-center p-2">
+                      <BullsEyeChart segmentData={analysis?.segments.detailed || []} />
                     </div>
                   </div>
                 </>

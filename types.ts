@@ -21,6 +21,7 @@ export interface AnalysisResult {
     basal: number;
     mid: number;
     apical: number;
+    detailed: number[]; // 17 segments for Bull's Eye
   };
 }
 

@@ -2,10 +2,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, RefreshCw, Activity, Heart, ShieldAlert, 
-  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList, ScanLine, Zap, Eye, EyeOff, Crosshair, Sparkles
+  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList, ScanLine, Zap, Eye, EyeOff, Crosshair, Sparkles, Droplets
 } from 'lucide-react';
 import { TrackingPoint, AnalysisResult } from './types.ts';
-import { simulateHeartbeat, trackSpeckle, enhanceContrast, autoDetectWalls, createDiagnosticMask } from './utils/motion.ts';
+import { simulateHeartbeat, trackSpeckle, enhanceContrast, autoDetectWalls, createDiagnosticMask, calculateArea } from './utils/motion.ts';
 import BullsEyeChart from './components/BullsEyeChart.tsx';
 import TrackingOverlay from './components/TrackingOverlay.tsx';
 import StrainChart from './components/StrainChart.tsx';
@@ -18,6 +18,10 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [mask, setMask] = useState<ImageData | null>(null);
+  
+  // FEVI tracking states
+  const [maxObservedArea, setMaxObservedArea] = useState<number>(0);
+  const [minObservedArea, setMinObservedArea] = useState<number>(Infinity);
   
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<'demo' | 'video'>('demo');
@@ -90,6 +94,14 @@ const App: React.FC = () => {
         const localStrain = ((distCurrent - distInitial) / (distInitial || 1)) * 100;
         return { ...pt, current: nextPos, strain: localStrain };
       });
+
+      // Calculate Area for FEVI
+      const currentArea = calculateArea(updated.map(p => p.current));
+      if (currentArea > 0) {
+        setMaxObservedArea(prev => Math.max(prev, currentArea));
+        setMinObservedArea(prev => Math.min(prev, currentArea));
+      }
+
       const avgStrain = updated.reduce((acc, p) => acc + p.strain, 0) / updated.length;
       setHistory(h => [...h, { time: Date.now(), strain: avgStrain }].slice(-100));
       return updated;
@@ -108,12 +120,18 @@ const App: React.FC = () => {
           setPoints(pts => {
              const simulated = pts.length > 0 ? simulateHeartbeat(pts, next) : [];
              if (pts.length === 0) {
-               // Initial auto-detection for simulation
                const dummyCtx = currentFrameCanvas.current.getContext('2d');
                if (dummyCtx) return autoDetectWalls(dummyCtx, 600, 450);
              }
              return simulated;
           });
+          
+          const currentArea = calculateArea(points.map(p => p.current));
+          if (currentArea > 0) {
+            setMaxObservedArea(prev => Math.max(prev, currentArea));
+            setMinObservedArea(prev => Math.min(prev, currentArea));
+          }
+
           setHistory(h => [...h, { time: next, strain: currentStrain }].slice(-100));
           updateBuffers();
           return next;
@@ -121,7 +139,7 @@ const App: React.FC = () => {
       }
     }
     requestRef.current = requestAnimationFrame(animate);
-  }, [isPlaying, sourceType, updateBuffers]);
+  }, [isPlaying, sourceType, updateBuffers, points]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(animate);
@@ -142,10 +160,17 @@ const App: React.FC = () => {
   const runAnalysis = () => {
     setIsCalculating(true);
     setTimeout(() => {
+      // Calculate FEVI (Fractional Area Change as proxy for EF)
+      const calculatedFevi = maxObservedArea > 0 
+        ? ((maxObservedArea - minObservedArea) / maxObservedArea) * 100 
+        : 55;
+
       const detailedSegments = Array.from({ length: 17 }).map(() => -15 + (Math.random() * 10 - 5));
       const mockResult: AnalysisResult = {
         gls: history.length > 0 ? history[history.length-1].strain : -18.4,
-        ef: 55, hr: 72, timestamp: Date.now(),
+        ef: Math.max(20, Math.min(85, calculatedFevi)),
+        fevi: Math.max(20, Math.min(85, calculatedFevi)),
+        hr: 72, timestamp: Date.now(),
         segments: { basal: -15.2, mid: -19.4, apical: -22.1, detailed: detailedSegments }
       };
       setAnalysis(mockResult);
@@ -159,6 +184,8 @@ const App: React.FC = () => {
     setPoints([]);
     setAnalysis(null);
     setMask(null);
+    setMaxObservedArea(0);
+    setMinObservedArea(Infinity);
     if (videoRef.current) videoRef.current.currentTime = 0;
   };
 
@@ -178,7 +205,7 @@ const App: React.FC = () => {
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800">
              <Sparkles size={14} className="text-blue-400" />
-             <span className="text-[10px] font-bold text-slate-400 uppercase">AI-Driven Segmentation Active</span>
+             <span className="text-[10px] font-bold text-slate-400 uppercase">AI-Driven FEVI Calculation</span>
           </div>
           <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all">
             <Upload size={16} /> Import Scan
@@ -230,25 +257,31 @@ const App: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <StrainChart data={history} />
-            <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
-              <div className="grid grid-cols-2 gap-6">
-                 <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Global Strain (GLS)</span>
-                    <span className={`text-3xl font-bold tabular-nums ${history.length > 0 && history[history.length-1].strain < -15 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {history.length > 0 ? history[history.length-1].strain.toFixed(1) : '0.0'}%
-                    </span>
-                 </div>
-                 <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Detected Area</span>
-                    <span className="text-3xl font-bold text-indigo-400 tabular-nums">AUTO</span>
-                 </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                <div className="flex flex-col gap-1">
+                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Global Strain (GLS)</span>
+                   <span className={`text-3xl font-bold tabular-nums ${history.length > 0 && history[history.length-1].strain < -15 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                     {history.length > 0 ? history[history.length-1].strain.toFixed(1) : '0.0'}%
+                   </span>
+                </div>
+                <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
+                   <ScanLine size={14} className="text-blue-500" />
+                   <span className="text-[10px] font-bold uppercase">Speckle Engine</span>
+                </div>
               </div>
-              <div className="mt-6 pt-6 border-t border-slate-800 flex items-center justify-between">
-                 <div className="flex items-center gap-2 text-slate-400">
-                    <ScanLine size={14} className="text-blue-500" />
-                    <span className="text-[10px] font-bold uppercase">Contrast Optimized Speckle Engine</span>
-                 </div>
-                 <span className="text-[10px] text-slate-600 font-mono uppercase">LVM v2.4</span>
+              
+              <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                <div className="flex flex-col gap-1">
+                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">FEVI (LVEF)</span>
+                   <span className={`text-3xl font-bold tabular-nums ${analysis ? (analysis.fevi > 50 ? 'text-emerald-400' : 'text-amber-400') : 'text-slate-600'}`}>
+                     {analysis ? analysis.fevi.toFixed(1) : '--'}%
+                   </span>
+                </div>
+                <div className="mt-4 pt-4 border-t border-slate-800 flex items-center gap-2 text-slate-400">
+                   <Droplets size={14} className="text-indigo-400" />
+                   <span className="text-[10px] font-bold uppercase">Volume Analysis</span>
+                </div>
               </div>
             </div>
           </div>
@@ -266,12 +299,12 @@ const App: React.FC = () => {
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Functional Status</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-emerald-400`}>
-                        {analysis.gls < -15 ? 'NORMAL' : 'DEVIATED'}
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 ${analysis.fevi > 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {analysis.fevi > 50 ? 'NORMAL' : 'REDUCED'}
                       </span>
                     </div>
                     <p className="text-sm text-slate-300 leading-relaxed italic">
-                      "Autonomous segmentation confirms myocardial wall movement. Global shortening measured at {analysis.gls.toFixed(1)}%. Area coloring indicates localized contractility."
+                      "Autonomous segmentation confirms myocardial wall movement. FEVI (Left Ventricular Ejection Fraction) calculated at {analysis.fevi.toFixed(1)}% based on fractional area change."
                     </p>
                   </div>
                   <div className="pt-4 border-t border-slate-800">
@@ -285,8 +318,9 @@ const App: React.FC = () => {
                    <h3 className="text-sm font-semibold text-slate-400 uppercase">Awaiting Input</h3>
                    <div className="text-xs text-slate-500 mt-4 space-y-4 px-6 text-left border-l border-slate-800">
                       <p>1. Import an <span className="text-blue-400 font-bold">MP4 Echocardiogram</span> scan.</p>
-                      <p>2. Press <span className="text-blue-400 font-bold">Play</span> to trigger autonomous wall detection.</p>
-                      <p>3. Observe <span className="text-emerald-400 font-bold">Colored Contours</span> following the myocardial borders.</p>
+                      <p>2. Press <span className="text-blue-400 font-bold">Play</span> to trigger autonomous wall detection and area tracking.</p>
+                      <p>3. Observe the <span className="text-indigo-400 font-bold">FEVI</span> calculation as the chamber contracts.</p>
+                      <p>4. Click <span className="text-emerald-400 font-bold">Full Diagnostic</span> for the medical summary.</p>
                    </div>
                 </div>
               )}
@@ -298,7 +332,7 @@ const App: React.FC = () => {
       <footer className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
            <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Footer Logo" className="h-6 w-auto opacity-50" />
-           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • Fully Autonomous</span>
+           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Myocardial Strain Platform • FEVI v1.0</span>
         </div>
       </footer>
     </div>

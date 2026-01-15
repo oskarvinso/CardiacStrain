@@ -19,6 +19,30 @@ export const enhanceContrast = (data: Uint8ClampedArray) => {
 };
 
 /**
+ * Calculates the area of a polygon defined by tracking points.
+ * Uses the Shoelace formula (Surveyor's formula).
+ */
+export const calculateArea = (points: Vector2[]): number => {
+  if (points.length < 3) return 0;
+  
+  // Sort points by angle to center to ensure a valid polygon for the area formula
+  const centerX = points.reduce((a, b) => a + b.x, 0) / points.length;
+  const centerY = points.reduce((a, b) => a + b.y, 0) / points.length;
+  
+  const sorted = [...points].sort((a, b) => {
+    return Math.atan2(a.y - centerY, a.x - centerX) - Math.atan2(b.y - centerY, b.x - centerX);
+  });
+
+  let area = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const j = (i + 1) % sorted.length;
+    area += sorted[i].x * sorted[j].y;
+    area -= sorted[j].x * sorted[i].y;
+  }
+  return Math.abs(area) / 2;
+};
+
+/**
  * Performs Sobel edge detection and returns a diagnostic mask.
  */
 export const createDiagnosticMask = (ctx: CanvasRenderingContext2D, width: number, height: number, strainValue: number): ImageData => {
@@ -78,7 +102,6 @@ export const autoDetectWalls = (edgeCtx: CanvasRenderingContext2D, width: number
   for (let y = 50; y < height - 50; y += step) {
     for (let x = 50; x < width - 50; x += step) {
       const idx = (y * width + x) * 4;
-      // Simple heuristic: area must have high gradient and be within a certain distance from center
       const dx = x - width / 2;
       const dy = y - height / 2;
       const dist = Math.sqrt(dx * dx + dy * dy);

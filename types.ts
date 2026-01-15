@@ -15,6 +15,7 @@ export interface TrackingPoint {
 export interface AnalysisResult {
   gls: number;
   ef: number;
+  fevi: number;
   hr: number;
   timestamp: number;
   segments: {

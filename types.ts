@@ -12,22 +12,23 @@ export interface TrackingPoint {
   strain: number;
 }
 
-export interface AnalysisResult {
+export interface ViewAnalysis {
   gls: number;
   ef: number;
-  fevi: number;
+  maxArea: number;
+  minArea: number;
+  history: { time: number; strain: number }[];
+  points: TrackingPoint[];
+  mask: ImageData | null;
+}
+
+export interface AnalysisResult {
+  biplaneEf: number;
+  a4c: ViewAnalysis;
+  a2c: ViewAnalysis;
   hr: number;
   timestamp: number;
   segments: {
-    basal: number;
-    mid: number;
-    apical: number;
     detailed: number[];
   };
-}
-
-export interface AIInsight {
-  observation: string;
-  severity: 'Normal' | 'Mild' | 'Moderate' | 'Severe';
-  recommendation: string;
 }

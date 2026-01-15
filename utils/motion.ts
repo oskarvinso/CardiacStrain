@@ -19,9 +19,9 @@ export const enhanceContrast = (data: Uint8ClampedArray) => {
 };
 
 /**
- * Basic Sobel operator for edge detection.
+ * Performs Sobel edge detection and returns a diagnostic mask.
  */
-export const applySobel = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+export const createDiagnosticMask = (ctx: CanvasRenderingContext2D, width: number, height: number, strainValue: number): ImageData => {
   const input = ctx.getImageData(0, 0, width, height);
   const output = ctx.createImageData(width, height);
   const inputData = input.data;
@@ -29,6 +29,11 @@ export const applySobel = (ctx: CanvasRenderingContext2D, width: number, height:
 
   const kernelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
   const kernelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+
+  // Base diagnostic color based on strain (Green for healthy, Red for reduced)
+  const r = strainValue < -15 ? 34 : 239;
+  const g = strainValue < -15 ? 197 : 68;
+  const b = strainValue < -15 ? 94 : 68;
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
@@ -46,28 +51,41 @@ export const applySobel = (ctx: CanvasRenderingContext2D, width: number, height:
 
       const mag = Math.sqrt(pixelX * pixelX + pixelY * pixelY);
       const outIdx = (y * width + x) * 4;
-      outputData[outIdx] = outputData[outIdx + 1] = outputData[outIdx + 2] = mag;
-      outputData[outIdx + 3] = 255;
+      
+      if (mag > 60) {
+        outputData[outIdx] = r;
+        outputData[outIdx + 1] = g;
+        outputData[outIdx + 2] = b;
+        outputData[outIdx + 3] = Math.min(255, mag * 2); // Alpha based on edge strength
+      } else {
+        outputData[outIdx + 3] = 0;
+      }
     }
   }
-  ctx.putImageData(output, 0, 0);
+  return output;
 };
 
 /**
- * Scans an edge-detected canvas to find high-gradient points likely belonging to the chamber wall.
+ * Automated wall detection: Scans the center area for the most likely chamber boundaries.
  */
-export const detectBorders = (edgeCtx: CanvasRenderingContext2D, width: number, height: number): TrackingPoint[] => {
+export const autoDetectWalls = (edgeCtx: CanvasRenderingContext2D, width: number, height: number): TrackingPoint[] => {
   const imgData = edgeCtx.getImageData(0, 0, width, height).data;
   const points: TrackingPoint[] = [];
-  const threshold = 180; // High gradient threshold
-  const step = 25; // Sample every 25 pixels to avoid overcrowding
+  const threshold = 140; 
+  const step = 20;
 
-  for (let y = step; y < height - step; y += step) {
-    for (let x = step; x < width - step; x += step) {
+  // Scan in a focused central ring where myocardial walls usually appear
+  for (let y = 50; y < height - 50; y += step) {
+    for (let x = 50; x < width - 50; x += step) {
       const idx = (y * width + x) * 4;
-      if (imgData[idx] > threshold) {
+      // Simple heuristic: area must have high gradient and be within a certain distance from center
+      const dx = x - width / 2;
+      const dy = y - height / 2;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      if (imgData[idx] > threshold && dist > 80 && dist < 220) {
         points.push({
-          id: `auto-${x}-${y}-${Date.now()}`,
+          id: `auto-${x}-${y}`,
           initial: { x, y },
           current: { x, y },
           velocity: { x: 0, y: 0 },
@@ -83,8 +101,8 @@ export const trackSpeckle = (
   prevCtx: CanvasRenderingContext2D,
   currCtx: CanvasRenderingContext2D,
   point: Vector2,
-  blockSize: number = 16,
-  searchWindow: number = 32
+  blockSize: number = 14,
+  searchWindow: number = 24
 ): Vector2 => {
   const halfBlock = blockSize / 2;
   const halfSearch = searchWindow / 2;
@@ -126,25 +144,6 @@ export const trackSpeckle = (
     x: point.x + bestOffset.x,
     y: point.y + bestOffset.y
   };
-};
-
-export const generateContourPoints = (width: number, height: number): TrackingPoint[] => {
-  const points: TrackingPoint[] = [];
-  const centerX = width / 2;
-  const centerY = height / 2;
-  for (let i = 0; i <= 15; i++) {
-    const t = (i / 15) * Math.PI - Math.PI/2;
-    const x = centerX + Math.cos(t) * (width * 0.12);
-    const y = centerY + Math.sin(t) * (height * 0.25) + (Math.abs(t) * 15);
-    points.push({
-      id: `pt-${i}`,
-      initial: { x, y },
-      current: { x, y },
-      velocity: { x: 0, y: 0 },
-      strain: 0
-    });
-  }
-  return points;
 };
 
 export const simulateHeartbeat = (points: TrackingPoint[], phase: number): TrackingPoint[] => {

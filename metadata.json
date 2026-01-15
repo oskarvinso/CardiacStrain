@@ -1,0 +1,7 @@
+{
+  "name": "CardiaStrain AI - Speckle Tracking System",
+  "description": "An advanced medical imaging dashboard for echocardiography speckle tracking, strain analysis, and AI-driven diagnostic assistance.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

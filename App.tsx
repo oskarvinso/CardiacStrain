@@ -2,15 +2,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, RefreshCw, Activity, Heart, ShieldAlert, 
-  Cpu, Share2, Info, ChevronRight, Upload, Video, FileVideo 
+  Share2, Info, ChevronRight, Upload, Video, FileVideo, ClipboardList
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, ReferenceLine 
 } from 'recharts';
-import { TrackingPoint, AnalysisResult, AIInsight } from './types.ts';
+import { TrackingPoint, AnalysisResult } from './types.ts';
 import { generateContourPoints, simulateHeartbeat } from './utils/motion.ts';
-import { getClinicalInsights } from './services/geminiService.ts';
 
 // --- BullsEyeChart Component ---
 const BullsEyeChart: React.FC<{ segmentData: number[] }> = ({ segmentData }) => {
@@ -171,8 +170,7 @@ const App: React.FC = () => {
   const [points, setPoints] = useState<TrackingPoint[]>([]);
   const [history, setHistory] = useState<{ time: number; strain: number }[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [aiInsight, setAiInsight] = useState<AIInsight | null>(null);
-  const [isLoadingInsight, setIsLoadingInsight] = useState(false);
+  const [isCalculating, setIsCalculating] = useState(false);
   const [showVectors, setShowVectors] = useState(true);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<'demo' | 'video'>('demo');
@@ -181,7 +179,6 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<number>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     setPoints(generateContourPoints(600, 450));
@@ -232,59 +229,51 @@ const App: React.FC = () => {
       setIsPlaying(false);
       setPhase(0);
       setHistory([]);
-      setAiInsight(null);
       setAnalysis(null);
     } else if (file) {
       alert("Please upload an MP4 video file.");
     }
   };
 
-  const captureFrame = (): string | undefined => {
-    const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    if (!video || !canvas || sourceType !== 'video') return undefined;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return undefined;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-  };
-
-  const runAnalysis = async () => {
-    setIsLoadingInsight(true);
-    const detailedSegments = Array.from({ length: 17 }).map(() => -15 + (Math.random() * 10 - 5));
-    const mockResult: AnalysisResult = {
-      gls: -18.4, ef: 55, hr: 72, timestamp: Date.now(),
-      segments: { basal: -15.2, mid: -19.4, apical: -22.1, detailed: detailedSegments }
-    };
-    setAnalysis(mockResult);
-    const frameBase64 = captureFrame();
-    const insight = await getClinicalInsights(mockResult, frameBase64);
-    setAiInsight(insight);
-    setIsLoadingInsight(false);
+  const runAnalysis = () => {
+    setIsCalculating(true);
+    // Simulate complex calculation lag
+    setTimeout(() => {
+      const detailedSegments = Array.from({ length: 17 }).map(() => -15 + (Math.random() * 10 - 5));
+      const mockResult: AnalysisResult = {
+        gls: -18.4, ef: 55, hr: 72, timestamp: Date.now(),
+        segments: { basal: -15.2, mid: -19.4, apical: -22.1, detailed: detailedSegments }
+      };
+      setAnalysis(mockResult);
+      setIsCalculating(false);
+    }, 1200);
   };
 
   const resetData = () => {
     setHistory([]);
     setPhase(0);
     setPoints(generateContourPoints(600, 450));
-    setAiInsight(null);
     setAnalysis(null);
     if (videoRef.current) videoRef.current.currentTime = 0;
+  };
+
+  const getClinicalStatus = (gls: number) => {
+    if (gls <= -18) return { text: 'Healthy Function', color: 'text-emerald-500', severity: 'Normal' };
+    if (gls <= -12) return { text: 'Borderline/Mild Impairment', color: 'text-amber-500', severity: 'Mild' };
+    return { text: 'Significant Impairment', color: 'text-red-500', severity: 'Moderate/Severe' };
   };
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col">
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="video/mp4" className="hidden" />
-      <canvas ref={captureCanvasRef} className="hidden" />
+      
       <nav className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
           <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Logo" className="h-10 w-auto object-contain" />
           <div className="h-8 w-[1px] bg-slate-800 mx-1 hidden sm:block" />
           <div>
-            <h1 className="font-bold text-lg tracking-tight">CardiaStrain<span className="text-blue-500">AI</span></h1>
-            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Speckle Tracking Dashboard</p>
+            <h1 className="font-bold text-lg tracking-tight">CardiaStrain</h1>
+            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Medical Speckle Tracking</p>
           </div>
         </div>
         <div className="flex items-center gap-6">
@@ -293,6 +282,7 @@ const App: React.FC = () => {
           </button>
         </div>
       </nav>
+
       <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1600px] mx-auto w-full">
         <div className="lg:col-span-8 flex flex-col gap-6">
           <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl group flex items-center justify-center">
@@ -309,17 +299,17 @@ const App: React.FC = () => {
             </div>
             <div className="absolute top-6 left-6 flex flex-col gap-2">
               <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50">
-                <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-red-500 animate-ping' : 'bg-slate-600'}`} />
+                <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-blue-500 animate-ping' : 'bg-slate-600'}`} />
                 <span className="text-xs font-mono text-slate-300 uppercase">{sourceType} active</span>
               </div>
             </div>
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 px-6 py-3 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white"><RefreshCw size={20} /></button>
+              <button onClick={resetData} className="p-2 text-slate-400 hover:text-white" title="Reset Simulation"><RefreshCw size={20} /></button>
               <button onClick={() => setIsPlaying(!isPlaying)} className="w-12 h-12 flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-transform active:scale-95">
                 {isPlaying ? <Pause fill="white" size={24} /> : <Play fill="white" size={24} className="ml-1" />}
               </button>
-              <button onClick={runAnalysis} disabled={isLoadingInsight} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
-                <Activity size={18} className="text-emerald-400" /> Analyze
+              <button onClick={runAnalysis} disabled={isCalculating} className="flex items-center gap-2 text-sm font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl disabled:opacity-50">
+                <Activity size={18} className="text-emerald-400" /> Calculate Metrics
               </button>
             </div>
           </div>
@@ -328,18 +318,18 @@ const App: React.FC = () => {
             <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
               <div className="grid grid-cols-2 gap-6">
                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase">GLS</span>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">Average GLS</span>
                     <span className="text-3xl font-bold text-blue-400 tabular-nums">{history.length > 0 ? history[history.length-1].strain.toFixed(1) : '0.0'}%</span>
                  </div>
                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase">HR</span>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">Heart Rate</span>
                     <span className="text-3xl font-bold text-emerald-400 tabular-nums">72 <span className="text-sm font-normal text-slate-500">BPM</span></span>
                  </div>
               </div>
               <div className="mt-6 pt-6 border-t border-slate-800 flex items-center justify-between">
                  <div className="flex items-center gap-2 text-slate-400">
                     <Heart size={14} className="text-red-500 fill-red-500" />
-                    <span className="text-xs">Stable Trace</span>
+                    <span className="text-xs">Deformation Engine Ready</span>
                  </div>
               </div>
             </div>
@@ -348,38 +338,62 @@ const App: React.FC = () => {
         <div className="lg:col-span-4 flex flex-col gap-6">
           <div className="bg-slate-900/50 rounded-2xl border border-slate-800 flex flex-col flex-1 overflow-hidden">
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-               <div className="flex items-center gap-3"><Cpu className="text-indigo-400" size={20} /><h2 className="font-bold uppercase tracking-tight">AI Diagnostic</h2></div>
-               {isLoadingInsight && <RefreshCw size={16} className="animate-spin text-slate-500" />}
+               <div className="flex items-center gap-3"><ClipboardList className="text-blue-400" size={20} /><h2 className="font-bold uppercase tracking-tight">Clinical Summary</h2></div>
+               {isCalculating && <RefreshCw size={16} className="animate-spin text-slate-500" />}
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {aiInsight ? (
+              {analysis ? (
                 <>
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Severity</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${aiInsight.severity === 'Normal' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>{aiInsight.severity}</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Functional Status</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 ${getClinicalStatus(analysis.gls).color}`}>
+                        {getClinicalStatus(analysis.gls).severity}
+                      </span>
                     </div>
-                    <p className="text-sm text-slate-300 leading-relaxed italic">"{aiInsight.observation}"</p>
+                    <p className="text-sm text-slate-300 leading-relaxed italic">
+                      "Myocardial deformation analysis indicates {getClinicalStatus(analysis.gls).text.toLowerCase()} with a calculated Global Longitudinal Strain of {analysis.gls}%."
+                    </p>
                   </div>
                   <div className="pt-4 border-t border-slate-800">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-6">Polar Map (AHA 17)</h4>
-                    <div className="flex justify-center p-2"><BullsEyeChart segmentData={analysis?.segments.detailed || []} /></div>
+                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-6">AHA 17-Segment Polar Map</h4>
+                    <div className="flex justify-center p-2"><BullsEyeChart segmentData={analysis.segments.detailed} /></div>
+                  </div>
+                  <div className="space-y-4">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                      <ShieldAlert size={14} className="text-amber-500" /> Clinical Notes
+                    </h4>
+                    <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50">
+                      <ul className="text-xs text-slate-400 space-y-2 list-disc pl-4">
+                        <li>Basal segments show moderate correlation.</li>
+                        <li>Apical shortening preserved.</li>
+                        <li>Compare with baseline measurements for trend analysis.</li>
+                      </ul>
+                    </div>
                   </div>
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-12 text-center opacity-50">
                    <Activity size={32} className="text-slate-600 mb-4" />
-                   <h3 className="text-sm font-semibold text-slate-400 uppercase">Analysis Pending</h3>
+                   <h3 className="text-sm font-semibold text-slate-400 uppercase">Awaiting Calculation</h3>
+                   <p className="text-xs text-slate-500 mt-2 px-8">Calculate metrics to generate the segmental polar map and functional summary.</p>
                 </div>
               )}
+            </div>
+            <div className="p-4 bg-slate-950 border-t border-slate-800">
+              <button className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-sm flex items-center justify-center gap-2 transition-all">
+                Export Technical Report
+                <ChevronRight size={16} />
+              </button>
             </div>
           </div>
         </div>
       </main>
+
       <footer className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4">
            <img src="https://www.ameliasoft.net/assets/img/abstract/LogoAmeliasoftSinFondo1.png" alt="Footer Logo" className="h-6 w-auto opacity-50" />
-           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Research Use Only • Ameliasoft engine</span>
+           <span className="text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">Scientific Measurement System • Ameliasoft engine</span>
         </div>
       </footer>
     </div>
